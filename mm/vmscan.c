@@ -1770,7 +1770,7 @@ static bool inactive_reclaimable_pages(struct lruvec *lruvec,
 	return false;
 }
 
-static inline bool need_memory_boosting(struct pglist_data *pgdat);
+static inline bool need_memory_boosting(struct pglist_data *pgdat, bool skip);
 
 /*
  * shrink_inactive_list() is a helper for shrink_node().  It returns the number
@@ -1834,7 +1834,7 @@ shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
 	if (nr_taken == 0)
 		return 0;
 
-	if (need_memory_boosting(pgdat)) {
+	if (need_memory_boosting(pgdat, false)) {
 		force_reclaim = true;
 		ttu |= TTU_IGNORE_ACCESS;
 	}
@@ -2300,13 +2300,13 @@ static inline bool mem_boost_pgdat_wmark(struct pglist_data *pgdat)
 	return false;
 }
 
-static inline bool need_memory_boosting(struct pglist_data *pgdat)
+static inline bool need_memory_boosting(struct pglist_data *pgdat, bool skip)
 {
 	bool ret;
 
 	test_and_set_mem_boost_timeout();
 
-	if (memory_boosting_disabled)
+	if (!skip && memory_boosting_disabled)
 		return false;
 
 	switch (mem_boost_mode) {
@@ -2431,7 +2431,7 @@ static void get_scan_count(struct lruvec *lruvec, struct mem_cgroup *memcg,
 		}
 	}
 
-	if (current_is_kswapd() && need_memory_boosting(pgdat)) {
+	if (current_is_kswapd() && need_memory_boosting(pgdat, true)) {
 		scan_balance = SCAN_FILE;
 		goto out;
 	}
@@ -3346,7 +3346,7 @@ static bool zone_balanced(struct zone *zone, int order, int classzone_idx)
 {
 	unsigned long mark = high_wmark_pages(zone);
 
-	if (current_is_kswapd() && need_memory_boosting(zone->zone_pgdat))
+	if (current_is_kswapd() && need_memory_boosting(zone->zone_pgdat, false))
 		mark *= MEM_BOOST_WMARK_SCALE_FACTOR;
 
 	if (!zone_watermark_ok_safe(zone, order, mark, classzone_idx))
@@ -3358,6 +3358,7 @@ static bool zone_balanced(struct zone *zone, int order, int classzone_idx)
 	 */
 	clear_bit(PGDAT_CONGESTED, &zone->zone_pgdat->flags);
 	clear_bit(PGDAT_DIRTY, &zone->zone_pgdat->flags);
+	clear_bit(PGDAT_WRITEBACK, &zone->zone_pgdat->flags);
 
 	return true;
 }
@@ -3535,7 +3536,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int classzone_idx)
 		 * If we're getting trouble reclaiming, start doing writepage
 		 * even in laptop mode.
 		 */
-		if (sc.priority < DEF_PRIORITY - 2 || !pgdat_reclaimable(pgdat))
+		if (sc.priority < DEF_PRIORITY - 2)
 			sc.may_writepage = 1;
 
 		/* Call soft limit reclaim before calling shrink_node. */
@@ -3781,7 +3782,7 @@ void wakeup_kswapd(struct zone *zone, int order, enum zone_type classzone_idx)
 	if (pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES)
 		return;
 
-	if (need_memory_boosting(pgdat))
+	if (need_memory_boosting(pgdat, false))
 		goto wakeup;
 
 	/* Only wake kswapd if all zones are unbalanced */
